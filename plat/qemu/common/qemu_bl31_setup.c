@@ -9,8 +9,11 @@
 #include <arch.h>
 #include <arch_helpers.h>
 #include <common/bl_common.h>
+#include <common/debug.h>
+#include <drivers/arm/css/scmi.h>
 #include <drivers/arm/pl061_gpio.h>
 #include <lib/gpt_rme/gpt_rme.h>
+#include <lib/mmio.h>
 #if TRANSFER_LIST
 #include <transfer_list.h>
 #endif
@@ -84,6 +87,71 @@ static entry_point_info_t bl33_image_ep_info;
 static entry_point_info_t rmm_image_ep_info;
 #endif
 static struct transfer_list_header __maybe_unused *bl31_tl;
+
+#define QEMU_SCMI_BRIDGE_REG_BASE	U(0x090d0000)
+#define QEMU_SCMI_BRIDGE_SHM_BASE	U(0x090e0000)
+#define QEMU_SCMI_BRIDGE_DOORBELL	(QEMU_SCMI_BRIDGE_REG_BASE + U(0x08))
+
+static scmi_lock_t qemu_scmi_lock;
+static scmi_channel_plat_info_t qemu_scmi_plat_info = {
+	.scmi_mbx_mem = QEMU_SCMI_BRIDGE_SHM_BASE,
+	.db_reg_addr = QEMU_SCMI_BRIDGE_DOORBELL,
+	.db_preserve_mask = 0xfffffffeU,
+	.db_modify_mask = 0x1U,
+};
+static scmi_channel_t qemu_scmi_channel = {
+	.info = &qemu_scmi_plat_info,
+	.lock = &qemu_scmi_lock,
+};
+
+static void qemu_scmi_ring_doorbell(scmi_channel_plat_info_t *plat_info)
+{
+	mmio_write_32(plat_info->db_reg_addr, plat_info->db_modify_mask);
+}
+
+void udelay(uint32_t usec)
+{
+	(void)usec;
+}
+
+static void qemu_scmi_probe(void)
+{
+	uint32_t version = 0U;
+	uint32_t protocol_count = 0U;
+	uint32_t agent_count = 0U;
+	uint32_t agent_id = 0U;
+	char agent_name[21] = { 0 };
+	int ret;
+
+	qemu_scmi_plat_info.ring_doorbell = qemu_scmi_ring_doorbell;
+	qemu_scmi_channel.is_initialized = 1;
+
+	ret = scmi_proto_version(&qemu_scmi_channel, SCMI_BASE_PROTO_ID, &version);
+	if (ret != SCMI_E_SUCCESS) {
+		WARN("QEMU SCMI: BASE protocol version query failed: %d\n", ret);
+		return;
+	}
+
+	INFO("QEMU SCMI: BASE version 0x%x\n", version);
+
+	ret = scmi_base_protocol_attributes(
+		&qemu_scmi_channel, &protocol_count, &agent_count);
+	if (ret != SCMI_E_SUCCESS) {
+		WARN("QEMU SCMI: BASE protocol attributes query failed: %d\n", ret);
+		return;
+	}
+
+	INFO("QEMU SCMI: protocols=%u agents=%u\n", protocol_count, agent_count);
+
+	ret = scmi_base_discover_agent(
+		&qemu_scmi_channel, 1U, &agent_id, agent_name);
+	if (ret != SCMI_E_SUCCESS) {
+		WARN("QEMU SCMI: discover agent 1 failed: %d\n", ret);
+		return;
+	}
+
+	INFO("QEMU SCMI: agent%u name=\"%s\"\n", agent_id, agent_name);
+}
 
 /*******************************************************************************
  * Perform any BL3-1 early platform setup.  Here is an opportunity to copy
@@ -315,6 +383,7 @@ void bl31_platform_setup(void)
 {
 	plat_qemu_gic_init();
 	qemu_gpio_init();
+	qemu_scmi_probe();
 }
 
 unsigned int plat_get_syscnt_freq2(void)

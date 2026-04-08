@@ -158,6 +158,8 @@ endif
 
 ifeq (${ARCH},aarch64)
 BL31_SOURCES		+=	drivers/arm/pl061/pl061_gpio.c		\
+				drivers/arm/css/scmi/scmi_common.c	\
+				drivers/arm/css/scmi/scmi_base_proto.c	\
 				drivers/gpio/gpio.c			\
 				${PLAT_QEMU_COMMON_PATH}/qemu_pm.c	\
 				${PLAT_QEMU_COMMON_PATH}/topology.c
